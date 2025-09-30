@@ -2,12 +2,18 @@ package com.invitacion.tanque.service;
 
 import com.invitacion.tanque.model.Usuario;
 import com.invitacion.tanque.repository.UsuarioRepository;
+import com.sendgrid.Method;
+import com.sendgrid.Request;
+import com.sendgrid.Response;
+import com.sendgrid.SendGrid;
+import com.sendgrid.helpers.mail.Mail;
+import com.sendgrid.helpers.mail.objects.Content;
+import com.sendgrid.helpers.mail.objects.Email;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import jakarta.mail.internet.MimeMessage;
+
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -16,17 +22,18 @@ import java.util.UUID;
 public class EmailService {
 
     private final UsuarioRepository usuarioRepository;
-    private final JavaMailSender mailSender;
 
     @Value("${backend.base-url}")
     private String baseUrl;
 
-    @Value("${spring.mail.username}")
-    private String emailSender;
+    @Value("${sendgrid.api-key}")
+    private String sendGridApiKey;
 
-    public EmailService(UsuarioRepository usuarioRepository, JavaMailSender mailSender) {
+    @Value("${email.sender.address}")
+    private String senderAddress;
+
+    public EmailService(UsuarioRepository usuarioRepository) {
         this.usuarioRepository = usuarioRepository;
-        this.mailSender = mailSender;
     }
 
     @Transactional
@@ -44,22 +51,14 @@ public class EmailService {
             String token = UUID.randomUUID().toString();
             usuario.setTokenConfirmacion(token);
             usuario.setTokenExpiracion(LocalDateTime.now().plusHours(48));
-
             usuarioRepository.save(usuario);
-
             String confirmLink = baseUrl + "/confirmar-asistencia/" + token;
 
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-
-            helper.setTo(usuario.getCorreo());
-            helper.setFrom(emailSender);
-            helper.setSubject("Invitación pal tonko");
-
+            String subject = "Invitación pal tonko";
             String htmlContent = buildEmailTemplate(usuario.getNombre(), confirmLink);
-            helper.setText(htmlContent, true);
 
-            mailSender.send(message);
+            sendEmail(usuario.getCorreo(), subject, htmlContent);
+
             System.out.println("Correo enviado a: " + usuario.getCorreo());
         }
     }
@@ -77,23 +76,43 @@ public class EmailService {
         String token = UUID.randomUUID().toString();
         usuario.setTokenConfirmacion(token);
         usuario.setTokenExpiracion(LocalDateTime.now().plusHours(48));
-
         usuarioRepository.save(usuario);
-
         String confirmLink = baseUrl + "/confirmar-asistencia/" + token;
 
-        MimeMessage message = mailSender.createMimeMessage();
-        MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-
-        helper.setTo(usuario.getCorreo());
-        helper.setFrom("tu.correo.personal@gmail.com");
-        helper.setSubject("Recordatorio: ¡Invitación - CONFIRMÁ YA! No seas falla. :c");
-
+        String subject = "Invitación pal tonko";
         String htmlContent = buildEmailTemplate(usuario.getNombre(), confirmLink);
-        helper.setText(htmlContent, true);
 
-        mailSender.send(message);
-        System.out.println("Correo de recordatorio/re-envío enviado a ID " + userId + ": " + usuario.getCorreo());
+        sendEmail(usuario.getCorreo(), subject, htmlContent);
+
+        System.out.println("Correo enviado a ID " + userId + ": " + usuario.getCorreo());
+    }
+
+    private void sendEmail(String toEmail, String subject, String htmlContent) throws Exception {
+
+        Email from = new Email(senderAddress);
+        Email to = new Email(toEmail);
+
+        Content content = new Content("text/html", htmlContent);
+        Mail mail = new Mail(from, subject, to, content);
+
+        SendGrid sg = new SendGrid(sendGridApiKey);
+        Request request = new Request();
+
+        try {
+            request.setMethod(Method.POST);
+            request.setEndpoint("mail/send");
+            request.setBody(mail.build());
+
+            Response response = sg.api(request);
+
+            if (response.getStatusCode() >= 300) {
+                System.err.println("Error en SendGrid. Status: " + response.getStatusCode() + " Body: " + response.getBody());
+                throw new RuntimeException("Fallo al enviar el correo a " + toEmail + " via SendGrid API.");
+            }
+        } catch (IOException ex) {
+            System.err.println("Error de I/O al enviar email: " + ex.getMessage());
+            throw ex;
+        }
     }
 
     private String buildEmailTemplate(String nombre, String link) {
